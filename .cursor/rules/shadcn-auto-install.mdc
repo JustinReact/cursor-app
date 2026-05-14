@@ -1,0 +1,29 @@
+---
+description: When shadcn/ui imports are used, install missing components with the CLI before leaving the task broken.
+alwaysApply: false
+---
+# shadcn/ui — install missing components
+
+This project uses shadcn with [components.json](mdc:components.json). UI primitives live under `src/components/ui/` (alias `@/components/ui`).
+
+## When to install
+
+Whenever you add or rely on an import from `@/components/ui/<name>` (or equivalent path to `src/components/ui/<name>.tsx`), **check that the file exists**. If it is missing, **install the component** — do not leave the app with unresolved imports or ask the user to run the CLI manually unless the command cannot run (for example, network blocked).
+
+## Command
+
+From the repository root:
+
+```bash
+npx shadcn add <component> -y
+```
+
+- Use the **registry component name** (kebab-case), e.g. `dialog`, `dropdown-menu`, `card`.
+- For several missing pieces in one pass: `npx shadcn add dialog dropdown-menu -y`
+- `-y` skips confirmation (non-interactive).
+
+Registry and behavior are defined by [components.json](mdc:components.json); do not hand-copy component source from the docs unless `shadcn add` fails and you must document the error.
+
+## After install
+
+Confirm the new file(s) under `src/components/ui/`, fix any import paths to match project aliases, and run lint/typecheck if you touched types or exports.

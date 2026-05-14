@@ -1,0 +1,71 @@
+---
+description: Enforces server components for reads, server actions for mutations, and Zod for validation
+alwaysApply: true
+---
+
+# Data Access Patterns
+
+## Reads: Server Components Only
+
+All data fetching must happen in Server Components. Never fetch data in Client Components or Route Handlers.
+
+```typescript
+// ❌ BAD — fetching in a client component
+"use client";
+useEffect(() => {
+  fetch("/api/decks").then(...);
+}, []);
+
+// ✅ GOOD — server component
+export default async function DecksPage() {
+  const { userId } = await auth();
+  const decks = await db.select().from(decksTable).where(eq(decksTable.userId, userId));
+  return <DeckList decks={decks} />;
+}
+```
+
+## Mutations: Server Actions Only
+
+All inserts, updates, and deletes must go through Server Actions. Never use Route Handlers for mutations.
+
+```typescript
+// ❌ BAD — mutation in a route handler
+export async function POST(req: Request) {
+  const body = await req.json();
+  await db.insert(decksTable).values(body);
+}
+
+// ✅ GOOD — server action
+"use server";
+export async function createDeck(input: CreateDeckInput) { ... }
+```
+
+## Validation: Zod Required
+
+All data passed to server actions must be validated with Zod. Define a schema and infer the TypeScript type from it.
+
+```typescript
+// ❌ BAD — no validation, using FormData
+export async function createDeck(data: FormData) {
+  const title = data.get("title");
+  await db.insert(decksTable).values({ title });
+}
+
+// ✅ GOOD — Zod schema + inferred type
+import { z } from "zod";
+
+const createDeckSchema = z.object({
+  title: z.string().min(1).max(100),
+  description: z.string().optional(),
+});
+
+type CreateDeckInput = z.infer<typeof createDeckSchema>;
+
+export async function createDeck(input: CreateDeckInput) {
+  const parsed = createDeckSchema.parse(input);
+  await db.insert(decksTable).values({ ...parsed, userId });
+}
+```
+
+- Always use `z.infer<typeof schema>` for the action's parameter type — never write the type manually or use `FormData`.
+- Call `.parse()` (throws) or `.safeParse()` (returns result) at the top of every server action before touching the database.

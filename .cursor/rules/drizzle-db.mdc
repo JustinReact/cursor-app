@@ -1,0 +1,56 @@
+---
+description: Database interactions must use Drizzle ORM schema and query builder
+alwaysApply: true
+---
+
+# Database Access with Drizzle
+
+All database reads and writes must go through the Drizzle schema defined in `src/schema.ts` and the Drizzle query builder. Raw SQL and direct database client calls are not allowed.
+
+## Schema
+
+Tables and inferred types live in `src/schema.ts`:
+- `decksTable` — `InsertDeck` / `SelectDeck`
+- `cardsTable` — `InsertCard` / `SelectCard`
+
+Always import tables and types from `src/schema.ts`.
+
+## Queries
+
+```typescript
+// ❌ BAD — raw SQL or direct client
+const rows = await client.query("SELECT * FROM decks WHERE user_id = $1", [userId]);
+
+// ✅ GOOD — Drizzle query builder
+import { db } from "@/db";
+import { decksTable } from "@/schema";
+import { eq } from "drizzle-orm";
+
+const decks = await db.select().from(decksTable).where(eq(decksTable.userId, userId));
+```
+
+## Mutations
+
+```typescript
+// ✅ INSERT
+await db.insert(decksTable).values({ userId, title, description });
+
+// ✅ UPDATE
+await db.update(decksTable).set({ title }).where(eq(decksTable.id, id));
+
+// ✅ DELETE
+await db.delete(decksTable).where(eq(decksTable.id, id));
+```
+
+## Types
+
+Use the inferred types for function signatures — do not redefine table shapes manually.
+
+```typescript
+// ❌ BAD
+function createDeck(deck: { userId: string; title: string }) {}
+
+// ✅ GOOD
+import { InsertDeck, SelectDeck } from "@/schema";
+function createDeck(deck: InsertDeck) {}
+```

@@ -1,0 +1,76 @@
+---
+description: Enforce per-user data isolation using Clerk auth
+alwaysApply: true
+---
+
+# Auth & Data Isolation with Clerk
+
+All auth is handled by Clerk. Users must only ever be able to read or mutate their own data.
+
+## Getting the current user
+
+In Server Components and Route Handlers, always resolve the user with `auth()` from `@clerk/nextjs/server` and reject unauthenticated requests immediately.
+
+```typescript
+// ✅ GOOD — server component or route handler
+import { auth } from "@clerk/nextjs/server";
+
+const { userId } = await auth();
+if (!userId) {
+  // In a Route Handler:
+  return new Response("Unauthorized", { status: 401 });
+  // In a Server Component: redirect("/sign-in") or notFound()
+}
+```
+
+## Scoping Drizzle queries to the current user
+
+Always filter by `userId` on every read and write. Never fetch a resource by `id` alone — always include the ownership check in the same query.
+
+```typescript
+// ❌ BAD — fetches any deck regardless of owner
+const deck = await db
+  .select()
+  .from(decksTable)
+  .where(eq(decksTable.id, deckId));
+
+// ✅ GOOD — ownership enforced at the DB layer
+const deck = await db
+  .select()
+  .from(decksTable)
+  .where(and(eq(decksTable.id, deckId), eq(decksTable.userId, userId)));
+```
+
+The same pattern applies to mutations:
+
+```typescript
+// ✅ UPDATE — scope to owner
+await db
+  .update(decksTable)
+  .set({ title })
+  .where(and(eq(decksTable.id, deckId), eq(decksTable.userId, userId)));
+
+// ✅ DELETE — scope to owner
+await db
+  .delete(decksTable)
+  .where(and(eq(decksTable.id, deckId), eq(decksTable.userId, userId)));
+```
+
+## Cards (owned via deck)
+
+`cardsTable` has no direct `userId`. Join through `decksTable` to verify ownership:
+
+```typescript
+// ✅ GOOD — verify the parent deck belongs to the user
+const [card] = await db
+  .select({ card: cardsTable })
+  .from(cardsTable)
+  .innerJoin(decksTable, eq(cardsTable.deckId, decksTable.id))
+  .where(and(eq(cardsTable.id, cardId), eq(decksTable.userId, userId)));
+
+if (!card) return new Response("Not Found", { status: 404 });
+```
+
+## Return 404, not 403, for unauthorized resource access
+
+When a user requests a resource that exists but belongs to someone else, respond with `404 Not Found`. This avoids leaking the existence of other users' data.
