@@ -1,32 +1,100 @@
 ---
-description: Enforces server components for reads, server actions for mutations, and Zod for validation
 alwaysApply: true
 ---
-
 # Data Access Patterns
 
-## Reads: Server Components Only
+## Query helpers live in `src/db/queries/`
 
-All data fetching must happen in Server Components. Never fetch data in Client Components or Route Handlers.
+All direct Drizzle calls must be encapsulated in helper functions inside `src/db/queries/`. Server Components and Server Actions must never call `db.*` directly — they always go through these helpers.
+
+File layout:
+```
+src/db/queries/
+  decks.ts   ← deck reads & writes
+  cards.ts   ← card reads & writes
+  index.ts   ← re-exports everything
+```
+
+Each helper receives `userId` as an explicit parameter (ownership is always enforced inside the helper, never left to the caller).
 
 ```typescript
+// src/db/queries/decks.ts
+import { db } from "@/db";
+import { decksTable, InsertDeck, SelectDeck } from "@/schema";
+import { and, eq } from "drizzle-orm";
+
+export async function getDecksByUser(userId: string): Promise<SelectDeck[]> {
+  return db.select().from(decksTable).where(eq(decksTable.userId, userId));
+}
+
+export async function getDeckById(
+  deckId: string,
+  userId: string
+): Promise<SelectDeck | undefined> {
+  const [deck] = await db
+    .select()
+    .from(decksTable)
+    .where(and(eq(decksTable.id, deckId), eq(decksTable.userId, userId)));
+  return deck;
+}
+
+export async function insertDeck(
+  values: Omit<InsertDeck, "id" | "createdAt">
+): Promise<void> {
+  await db.insert(decksTable).values(values);
+}
+
+export async function updateDeck(
+  deckId: string,
+  userId: string,
+  patch: Partial<Pick<InsertDeck, "title" | "description">>
+): Promise<void> {
+  await db
+    .update(decksTable)
+    .set(patch)
+    .where(and(eq(decksTable.id, deckId), eq(decksTable.userId, userId)));
+}
+
+export async function deleteDeck(deckId: string, userId: string): Promise<void> {
+  await db
+    .delete(decksTable)
+    .where(and(eq(decksTable.id, deckId), eq(decksTable.userId, userId)));
+}
+```
+
+## Reads: Server Components → query helpers
+
+Server Components resolve the user with `auth()`, then call query helpers. Never call `db.*` inline.
+
+```typescript
+// ❌ BAD — raw Drizzle in a server component
+export default async function DecksPage() {
+  const { userId } = await auth();
+  const decks = await db.select().from(decksTable).where(eq(decksTable.userId, userId));
+  return <DeckList decks={decks} />;
+}
+
 // ❌ BAD — fetching in a client component
 "use client";
 useEffect(() => {
   fetch("/api/decks").then(...);
 }, []);
 
-// ✅ GOOD — server component
+// ✅ GOOD — server component delegates to a query helper
+import { getDecksByUser } from "@/db/queries";
+
 export default async function DecksPage() {
   const { userId } = await auth();
-  const decks = await db.select().from(decksTable).where(eq(decksTable.userId, userId));
+  if (!userId) redirect("/sign-in");
+
+  const decks = await getDecksByUser(userId);
   return <DeckList decks={decks} />;
 }
 ```
 
-## Mutations: Server Actions Only
+## Mutations: Server Actions → query helpers
 
-All inserts, updates, and deletes must go through Server Actions. Never use Route Handlers for mutations.
+Server Actions validate input with Zod, then delegate to query helpers. Never call `db.*` inline.
 
 ```typescript
 // ❌ BAD — mutation in a route handler
@@ -35,20 +103,37 @@ export async function POST(req: Request) {
   await db.insert(decksTable).values(body);
 }
 
-// ✅ GOOD — server action
+// ❌ BAD — raw Drizzle inside a server action
 "use server";
-export async function createDeck(input: CreateDeckInput) { ... }
+export async function createDeck(input: CreateDeckInput) {
+  const parsed = createDeckSchema.parse(input);
+  await db.insert(decksTable).values({ ...parsed, userId });
+}
+
+// ✅ GOOD — server action delegates to a query helper
+"use server";
+import { insertDeck } from "@/db/queries";
+
+export async function createDeck(input: CreateDeckInput) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthorized");
+
+  const parsed = createDeckSchema.parse(input);
+  await insertDeck({ ...parsed, userId });
+
+  revalidatePath("/dashboard");
+}
 ```
 
 ## Validation: Zod Required
 
-All data passed to server actions must be validated with Zod. Define a schema and infer the TypeScript type from it.
+All data passed to server actions must be validated with Zod before calling any query helper.
 
 ```typescript
 // ❌ BAD — no validation, using FormData
 export async function createDeck(data: FormData) {
   const title = data.get("title");
-  await db.insert(decksTable).values({ title });
+  await insertDeck({ title, userId });
 }
 
 // ✅ GOOD — Zod schema + inferred type
@@ -62,10 +147,14 @@ const createDeckSchema = z.object({
 type CreateDeckInput = z.infer<typeof createDeckSchema>;
 
 export async function createDeck(input: CreateDeckInput) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthorized");
+
   const parsed = createDeckSchema.parse(input);
-  await db.insert(decksTable).values({ ...parsed, userId });
+  await insertDeck({ ...parsed, userId });
 }
 ```
 
 - Always use `z.infer<typeof schema>` for the action's parameter type — never write the type manually or use `FormData`.
-- Call `.parse()` (throws) or `.safeParse()` (returns result) at the top of every server action before touching the database.
+- Call `.parse()` (throws) or `.safeParse()` (returns result) at the top of every server action before calling any query helper.
+- Query helpers own all ownership/scoping logic — callers never repeat `userId` filtering outside of `src/db/queries/`.

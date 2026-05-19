@@ -1,0 +1,96 @@
+---
+alwaysApply: true
+---
+# Clerk Billing for B2C SaaS
+
+Billing is in Beta — pin `@clerk/nextjs` and `clerk-js` versions to avoid breaking API changes.
+
+B2C Billing targets **individual users** (not organizations). Plans and Features are managed in the [Clerk Dashboard](https://dashboard.clerk.com/~/billing/plans), not Stripe Billing. Stripe is used only for payment processing.
+
+## This app's Plans and Features
+
+Use these exact slugs — they must match the Clerk Dashboard.
+
+| Type | Slug | Purpose |
+|------|------|---------|
+| Plan | `free_plan` | Default free tier |
+| Plan | `pro` | Paid subscription |
+| Feature | `3_deck_limit` | Free tier — cap deck creation at 3 |
+| Feature | `unlimited_decks` | Pro tier — no deck limit |
+| Feature | `ai_flashcard_generation` | Pro tier — AI-generated flashcards |
+
+Prefer **feature checks** for entitlements (deck limits, AI access). Use **plan checks** when the whole experience differs by tier (e.g. upgrade prompts).
+
+## Setup
+
+1. Enable Billing in [Billing Settings](https://dashboard.clerk.com/~/billing/settings).
+2. Ensure `free_plan` and `pro` exist under **Plans for Users**, each with the Features above attached.
+3. Use the Clerk development gateway for local/test; connect a separate production Stripe account for prod.
+
+## Pricing page
+
+Use a dedicated page with `<PricingTable />` from `@clerk/nextjs`:
+
+```tsx
+import { PricingTable } from "@clerk/nextjs";
+
+export default function PricingPage() {
+  return (
+    <div className="mx-auto max-w-3xl px-4">
+      <PricingTable />
+    </div>
+  );
+}
+```
+
+## Gate access with Plans and Features
+
+Prefer server-side `has()` from `auth()` or client-side `<Show>`.
+
+### Server: `has()` (recommended for pages and actions)
+
+```tsx
+import { auth } from "@clerk/nextjs/server";
+
+export default async function CreateDeckPage() {
+  const { has } = await auth();
+
+  // Pro-only: unlimited decks
+  if (!has({ feature: "unlimited_decks" }) && !has({ feature: "3_deck_limit" })) {
+    return <p>Subscribe to create decks.</p>;
+  }
+
+  // ...
+}
+
+export default async function AiGeneratePage() {
+  const { has } = await auth();
+
+  if (!has({ feature: "ai_flashcard_generation" })) {
+    return <p>Upgrade to Pro for AI flashcard generation.</p>;
+  }
+
+  return <h1>Generate flashcards</h1>;
+}
+```
+
+Enforce the 3-deck cap in server actions by checking `3_deck_limit` and counting the user's decks before insert.
+
+### Client: `<Show>`
+
+```tsx
+import { Show } from "@clerk/nextjs";
+
+export default function AiGenerateButton() {
+  return (
+    <Show
+      when={{ feature: "ai_flashcard_generation" }}
+      fallback={<p>Upgrade to Pro for AI flashcard generation.</p>}
+    >
+      <button>Generate with AI</button>
+    </Show>
+  );
+}
+```
+
+Use `when={{ plan: "pro" }}` for tier-wide UI (e.g. upgrade banners). Use `when={{ plan: "free_plan" }}` for free-tier messaging.
